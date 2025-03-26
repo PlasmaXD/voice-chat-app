@@ -3,9 +3,10 @@
 // Edge Runtime で動作させるための設定
 export const config = { runtime: 'edge' };
 
+// Edge 環境では、@upstash/redis/edge をインポートする
 import { Redis } from '@upstash/redis';
 
-// Upstash Redis クライアントの初期化
+// Upstash Redis クライアントの初期化（接続は自動で HTTP リクエストベースで行われる）
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
@@ -29,7 +30,7 @@ export async function GET(request: Request) {
 
   const stream = new ReadableStream({
     async start(controller) {
-      // 定期で Redis リストからメッセージをポーリングする関数
+      // ポーリングループ：Redis リストからメッセージを取得して SSE 経由で送信
       async function pollMessages() {
         while (!cancelled) {
           try {
@@ -37,7 +38,7 @@ export async function GET(request: Request) {
             if (message !== null) {
               controller.enqueue(`data: ${message}\n\n`);
             } else {
-              // メッセージがなければ1秒待機
+              // メッセージがなければ 1 秒待機
               await new Promise((resolve) => setTimeout(resolve, 1000));
             }
           } catch (error) {
@@ -63,7 +64,7 @@ export async function GET(request: Request) {
       if (interval) {
         clearInterval(interval);
       }
-      // ※ 必要に応じて追加のクリーンアップ処理をここで実施
+      // 追加のクリーンアップ処理があればここに記述
     },
   });
 
