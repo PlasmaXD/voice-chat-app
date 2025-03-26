@@ -4,7 +4,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 
 const SIGNALING_SEND_URL = '/api/signaling/send';
-const SIGNALING_RECEIVE_URL = '/api/signaling/receive';
 
 export default function VoiceCall() {
   const [ownClientId, setOwnClientId] = useState('');
@@ -13,8 +12,9 @@ export default function VoiceCall() {
   const localAudioRef = useRef<HTMLAudioElement>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  // 保留中のICE候補を一時保持するためのref
+  // EventSource 用の ref
+  const eventSourceRef = useRef<EventSource | null>(null);
+  // 保留中のICE候補を保持
   const pendingCandidatesRef = useRef<RTCIceCandidate[]>([]);
 
   // シグナリングメッセージ送信用ヘルパー
@@ -32,21 +32,6 @@ export default function VoiceCall() {
         targetId: peerClientId,
       }),
     });
-  }
-
-  // シグナリングメッセージ受信用ポーリング
-  async function pollSignals() {
-    if (!ownClientId) return;
-    try {
-      const res = await fetch(`${SIGNALING_RECEIVE_URL}?clientId=${ownClientId}`);
-      const json = await res.json();
-      const messages = json.messages;
-      messages.forEach((msg: any) => {
-        handleSignal(msg);
-      });
-    } catch (err) {
-      console.error('Error polling signals', err);
-    }
   }
 
   // 保留中のICE候補をflushするヘルパー
@@ -78,14 +63,11 @@ export default function VoiceCall() {
     if (event === 'offer') {
       // 相手からのOfferを受信
       await pc.setRemoteDescription(new RTCSessionDescription(data));
-      // リモート記述設定後、保留中のICE候補をflush
       await flushPendingCandidates(pc);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      // Answerを返す
       sendSignal('answer', answer);
     } else if (event === 'answer') {
-      // 自分のOfferに対するAnswerを受信
       if (!pc.remoteDescription || !pc.remoteDescription.type) {
         await pc.setRemoteDescription(new RTCSessionDescription(data));
         await flushPendingCandidates(pc);
@@ -93,7 +75,6 @@ export default function VoiceCall() {
         console.warn("Remote description already set. Ignoring duplicate answer.");
       }
     } else if (event === 'ice-candidate') {
-      // ICE Candidateを受信
       const candidate = new RTCIceCandidate(data);
       if (pc.remoteDescription && pc.remoteDescription.type) {
         try {
@@ -111,6 +92,34 @@ export default function VoiceCall() {
       }
     }
   }
+
+  // SSEを使ったシグナリング受信用のセットアップ
+  useEffect(() => {
+    if (ownClientId && !eventSourceRef.current) {
+      const es = new EventSource(`/api/signaling/subscribe?clientId=${ownClientId}`);
+      eventSourceRef.current = es;
+      es.onmessage = (event) => {
+        try {
+          // "ping" を除外（任意）
+          if (event.data === 'ping') return;
+          const message = JSON.parse(event.data);
+          handleSignal(message);
+        } catch (err) {
+          console.error("Failed to parse SSE data", err);
+        }
+      };
+      es.onerror = (err) => {
+        console.error("SSE error:", err);
+        // 必要に応じて再接続処理を入れる
+      };
+    }
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, [ownClientId]);
 
   // 通話開始
   async function startCall() {
@@ -144,7 +153,7 @@ export default function VoiceCall() {
         }
       };
 
-      // ontrackイベント (相手からの音声を受信)
+      // ontrackイベント (相手からの音声受信)
       pc.ontrack = (event) => {
         console.log("ontrack event fired", event);
         const [remoteStream] = event.streams;
@@ -185,25 +194,8 @@ export default function VoiceCall() {
       setLocalStream(null);
     }
     setIsCallStarted(false);
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-    // 保留中の候補もクリア
     pendingCandidatesRef.current = [];
   }
-
-  // ポーリング開始（通話中かつownClientIdが設定済みなら毎秒実行）
-  useEffect(() => {
-    if (ownClientId && isCallStarted && !pollingIntervalRef.current) {
-      pollingIntervalRef.current = setInterval(pollSignals, 1000);
-    }
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-      }
-    };
-  }, [ownClientId, isCallStarted]);
 
   return (
     <div className="p-4">
