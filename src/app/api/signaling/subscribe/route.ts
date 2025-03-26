@@ -3,7 +3,8 @@
 // Edge Runtime で動作させるための設定
 export const config = { runtime: 'edge' };
 
-import { Redis } from '@upstash/redis'; // Edge 環境用
+import { Redis } from '@upstash/redis';
+import { NextResponse } from 'next/server';
 
 const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
 const redisToken = process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -12,6 +13,7 @@ if (!redisUrl || !redisToken) {
   throw new Error("Missing Upstash Redis configuration in environment variables.");
 }
 
+// Upstash Redis クライアントを初期化
 const redis = new Redis({
   url: redisUrl,
   token: redisToken,
@@ -24,23 +26,40 @@ export async function GET(request: Request): Promise<Response> {
     return new Response('Missing clientId', { status: 400 });
   }
   const channel = `messages:${clientId}`;
+
   const headers = {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache, no-transform',
     'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': '*',
   };
 
   let interval: ReturnType<typeof setInterval> | null = null;
 
+  // SSE 用の ReadableStream を構築
   const stream = new ReadableStream({
     async start(controller) {
+      // ❶ Pub/Subのサブスクライブか、あるいはリストへの書き込みをポーリングするか
+      //    (※現在 Upstash Redis でのPubSubサポートやEdge対応はバージョン・プラン等に依存)
       try {
-        // Redis Pub/Sub を利用してメッセージ配信
-        const subscriber = redis.duplicate();
-        await subscriber.subscribe(channel, (message) => {
-          controller.enqueue(`data: ${message}\n\n`);
-        });
+        // 例) Redisリストをポーリング
+        async function pollMessages() {
+          while (true) {
+            try {
+              const message = await redis.lpop(channel);
+              if (message) {
+                controller.enqueue(`data: ${message}\n\n`);
+              } else {
+                // メッセージが無ければ 1秒待機
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+              }
+            } catch (err) {
+              console.error("Error polling messages:", err);
+              controller.enqueue(`data: error\n\n`);
+              break;
+            }
+          }
+        }
+        pollMessages();
 
         // 接続維持用の定期 ping
         interval = setInterval(() => {
@@ -51,15 +70,16 @@ export async function GET(request: Request): Promise<Response> {
           }
         }, 20000);
       } catch (error) {
-        console.error("Error starting stream:", error);
+        console.error("Error starting SSE stream:", error);
         controller.enqueue(`data: error\n\n`);
       }
     },
     async cancel() {
+      // クライアントが SSE 接続を閉じたときのクリーンアップ
       if (interval) {
         clearInterval(interval);
       }
-      console.log("Stream cancelled");
+      console.log("SSE stream cancelled");
     },
   });
 

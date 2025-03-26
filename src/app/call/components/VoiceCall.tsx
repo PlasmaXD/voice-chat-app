@@ -104,9 +104,11 @@ export default function VoiceCall() {
     if (ownClientId && !eventSourceRef.current) {
       const es = new EventSource(`/api/signaling/subscribe?clientId=${ownClientId}`);
       eventSourceRef.current = es;
+      es.onopen = () => {
+        console.log("SSE connection opened");
+      };
       es.onmessage = (event) => {
         try {
-          // "ping" を除外（任意）
           if (event.data === 'ping') return;
           const message = JSON.parse(event.data);
           handleSignal(message);
@@ -116,7 +118,7 @@ export default function VoiceCall() {
       };
       es.onerror = (err) => {
         console.error("SSE error:", err);
-        // 必要に応じて再接続処理を入れる
+        // ここで再接続処理などを検討
       };
     }
     return () => {
@@ -125,7 +127,8 @@ export default function VoiceCall() {
         eventSourceRef.current = null;
       }
     };
-  }, [ownClientId]);
+  }, [ownClientId, handleSignal]);
+  
 
   // 通話開始
   async function startCall() {
