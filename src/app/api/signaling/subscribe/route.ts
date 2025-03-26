@@ -18,22 +18,21 @@ export async function GET(request: Request) {
     return new Response('Missing clientId', { status: 400 });
   }
   const channel = `messages:${clientId}`;
-
   const headers = {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
   };
 
+  let cancelled = false;
+  let interval: ReturnType<typeof setInterval> | null = null;
+
   const stream = new ReadableStream({
     async start(controller) {
-      let cancelled = false;
-
-      // 定期的に Redis リストからメッセージをポーリングする関数
+      // 定期で Redis リストからメッセージをポーリングする関数
       async function pollMessages() {
         while (!cancelled) {
           try {
-            // チャンネル（Redis リスト）からメッセージを取得
             const message = await redis.lpop(channel);
             if (message !== null) {
               controller.enqueue(`data: ${message}\n\n`);
@@ -51,22 +50,20 @@ export async function GET(request: Request) {
       pollMessages();
 
       // 接続維持用の定期 ping
-      const interval = setInterval(() => {
+      interval = setInterval(() => {
         try {
           controller.enqueue(`data: ping\n\n`);
         } catch (error) {
           console.error("Error enqueuing ping:", error);
         }
       }, 20000);
-
-      // ストリームが閉じられたときのクリーンアップ
-      controller.closed.catch(() => {
-        cancelled = true;
-        clearInterval(interval);
-      });
     },
-    cancel() {
-      // 追加のクリーンアップ処理が必要ならここで実施
+    async cancel() {
+      cancelled = true;
+      if (interval) {
+        clearInterval(interval);
+      }
+      // ※ 必要に応じて追加のクリーンアップ処理をここで実施
     },
   });
 
