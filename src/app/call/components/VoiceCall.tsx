@@ -17,8 +17,14 @@ export default function VoiceCall() {
   // 保留中のICE候補を保持
   const pendingCandidatesRef = useRef<RTCIceCandidate[]>([]);
 
+  
+  interface SignalMessage {
+    event: string;
+    data: RTCSessionDescriptionInit | RTCIceCandidateInit | unknown;
+  }
+  
   // シグナリングメッセージ送信用ヘルパー
-  async function sendSignal(event: string, data: any) {
+  async function sendSignal(event: string, data: RTCSessionDescriptionInit | RTCIceCandidateInit) {
     if (!peerClientId) {
       console.error('Peer Client ID is required');
       return;
@@ -34,6 +40,7 @@ export default function VoiceCall() {
     });
   }
 
+
   // 保留中のICE候補をflushするヘルパー
   async function flushPendingCandidates(pc: RTCPeerConnection) {
     if (pendingCandidatesRef.current.length > 0) {
@@ -41,8 +48,8 @@ export default function VoiceCall() {
       for (const candidate of pendingCandidatesRef.current) {
         try {
           await pc.addIceCandidate(candidate);
-        } catch (err: any) {
-          if (err.message && err.message.includes("Unknown ufrag")) {
+        } catch (err: unknown) {
+          if (err instanceof Error && err.message.includes("Unknown ufrag")) {
             console.warn("Ignoring ICE candidate with unknown ufrag:", err);
           } else {
             console.error("Error adding buffered ICE candidate", err);
@@ -52,35 +59,34 @@ export default function VoiceCall() {
       pendingCandidatesRef.current = [];
     }
   }
-
+  
   // 受信シグナルの処理
-  async function handleSignal(message: any) {
+  async function handleSignal(message: SignalMessage) {
     const { event, data } = message;
     console.log('Received signal:', event, data);
     const pc = pcRef.current;
     if (!pc) return;
-
+  
     if (event === 'offer') {
-      // 相手からのOfferを受信
-      await pc.setRemoteDescription(new RTCSessionDescription(data));
+      await pc.setRemoteDescription(new RTCSessionDescription(data as RTCSessionDescriptionInit));
       await flushPendingCandidates(pc);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
       sendSignal('answer', answer);
     } else if (event === 'answer') {
       if (!pc.remoteDescription || !pc.remoteDescription.type) {
-        await pc.setRemoteDescription(new RTCSessionDescription(data));
+        await pc.setRemoteDescription(new RTCSessionDescription(data as RTCSessionDescriptionInit));
         await flushPendingCandidates(pc);
       } else {
         console.warn("Remote description already set. Ignoring duplicate answer.");
       }
     } else if (event === 'ice-candidate') {
-      const candidate = new RTCIceCandidate(data);
+      const candidate = new RTCIceCandidate(data as RTCIceCandidateInit);
       if (pc.remoteDescription && pc.remoteDescription.type) {
         try {
           await pc.addIceCandidate(candidate);
-        } catch (err: any) {
-          if (err.message && err.message.includes("Unknown ufrag")) {
+        } catch (err: unknown) {
+          if (err instanceof Error && err.message.includes("Unknown ufrag")) {
             console.warn("Ignoring ICE candidate with unknown ufrag:", err);
           } else {
             console.error('Error adding ICE candidate', err);
@@ -92,7 +98,7 @@ export default function VoiceCall() {
       }
     }
   }
-
+  
   // SSEを使ったシグナリング受信用のセットアップ
   useEffect(() => {
     if (ownClientId && !eventSourceRef.current) {

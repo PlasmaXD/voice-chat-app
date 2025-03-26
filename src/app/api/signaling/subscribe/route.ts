@@ -51,7 +51,7 @@ export async function GET(request: Request) {
         }
       }, 20000);
     },
-    async cancel(reason) {
+    async cancel() {
       if (interval) {
         clearInterval(interval);
       }
