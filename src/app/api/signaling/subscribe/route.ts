@@ -1,13 +1,23 @@
 // app/api/signaling/subscribe/route.ts
-import { NextResponse } from 'next/server';
-import { createClient } from 'redis';
+
+// Edge Runtime で動作させるための設定
+export const config = { runtime: 'edge' };
+
+import { Redis } from '@upstash/redis';
+
+// Upstash Redis クライアントの初期化
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const clientId = searchParams.get('clientId');
   if (!clientId) {
-    return new NextResponse('Missing clientId', { status: 400 });
+    return new Response('Missing clientId', { status: 400 });
   }
+  const channel = `messages:${clientId}`;
 
   const headers = {
     'Content-Type': 'text/event-stream',
@@ -15,61 +25,48 @@ export async function GET(request: Request) {
     'Connection': 'keep-alive',
   };
 
-  // 外部変数としてクリーンアップ対象を定義
-  let interval: NodeJS.Timeout | null = null;
-  let subscriber: ReturnType<typeof createClient> | null = null;
-  let redis: ReturnType<typeof createClient> | null = null;
-
   const stream = new ReadableStream({
     async start(controller) {
-      // Redisクライアントの初期化
-      redis = createClient({ url: process.env.REDIS_URL });
-      await redis.connect();
-      // サブスクライバー用にクライアントを複製
-      subscriber = redis.duplicate();
-      await subscriber.connect();
+      let cancelled = false;
 
-      const channel = `messages:${clientId}`;
-      // Redis の PubSub チャンネルに subscribe
-      await subscriber.subscribe(channel, (message) => {
-        try {
-          controller.enqueue(`data: ${message}\n\n`);
-        } catch (err) {
-          console.error("Error enqueuing message:", err);
-        }
-      });
-
-      // 定期的に ping を送信して接続を維持
-      interval = setInterval(() => {
-        // controller.desiredSize が null でなければ enqueued
-        if (controller.desiredSize !== null) {
+      // 定期的に Redis リストからメッセージをポーリングする関数
+      async function pollMessages() {
+        while (!cancelled) {
           try {
-            controller.enqueue(`data: ping\n\n`);
-          } catch (err) {
-            console.error("Error enqueuing ping:", err);
+            // チャンネル（Redis リスト）からメッセージを取得
+            const message = await redis.lpop(channel);
+            if (message !== null) {
+              controller.enqueue(`data: ${message}\n\n`);
+            } else {
+              // メッセージがなければ1秒待機
+              await new Promise((resolve) => setTimeout(resolve, 1000));
+            }
+          } catch (error) {
+            console.error("Error polling messages:", error);
+            controller.enqueue(`data: error\n\n`);
+            break;
           }
         }
+      }
+      pollMessages();
+
+      // 接続維持用の定期 ping
+      const interval = setInterval(() => {
+        try {
+          controller.enqueue(`data: ping\n\n`);
+        } catch (error) {
+          console.error("Error enqueuing ping:", error);
+        }
       }, 20000);
-    },
-    async cancel() {
-      if (interval) {
+
+      // ストリームが閉じられたときのクリーンアップ
+      controller.closed.catch(() => {
+        cancelled = true;
         clearInterval(interval);
-      }
-      if (subscriber) {
-        try {
-          await subscriber.unsubscribe(`messages:${clientId}`);
-          await subscriber.disconnect();
-        } catch (err) {
-          console.error("Error during subscriber cleanup:", err);
-        }
-      }
-      if (redis) {
-        try {
-          await redis.disconnect();
-        } catch (err) {
-          console.error("Error during redis cleanup:", err);
-        }
-      }
+      });
+    },
+    cancel() {
+      // 追加のクリーンアップ処理が必要ならここで実施
     },
   });
 
