@@ -4,7 +4,7 @@
 export const config = { runtime: 'edge' };
 
 // Edge 環境では、@upstash/redis/edge をインポートする
-import { Redis } from '@upstash/redis/edge';
+import { Redis } from '@upstash/redis';
 
 // Upstash Redis クライアントの初期化（接続は自動で HTTP リクエストベースで行われる）
 const redisUrl = process.env.UPSTASH_REDIS_REST_URL;
