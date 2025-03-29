@@ -73,7 +73,7 @@ export async function GET(request: Request): Promise<Response> {
         controller.enqueue(`data: error\n\n`);
       }
     },
-    async cancel() {
+    async cancel(reason) {
       if (interval) {
         clearInterval(interval);
       }
