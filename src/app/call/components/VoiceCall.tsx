@@ -100,25 +100,63 @@ export default function VoiceCall() {
   }
   
   // SSEを使ったシグナリング受信用のセットアップ
+  // useEffect(() => {
+  //   if (ownClientId && !eventSourceRef.current) {
+  //     const es = new EventSource(`/api/signaling/subscribe?clientId=${ownClientId}`);
+  //     eventSourceRef.current = es;
+  //     es.onopen = () => {
+  //       console.log("SSE connection opened");
+  //     };
+  //     es.onmessage = (event) => {
+  //       try {
+  //         if (event.data === 'ping') return;
+  //         const message = JSON.parse(event.data);
+  //         handleSignal(message);
+  //       } catch (err) {
+  //         console.error("Failed to parse SSE data", err);
+  //       }
+  //     };
+  //     es.onerror = (err) => {
+  //       console.error("SSE error:", err);
+  //       // ここで再接続処理などを検討
+  //     };
+  //   }
+  //   return () => {
+  //     if (eventSourceRef.current) {
+  //       eventSourceRef.current.close();
+  //       eventSourceRef.current = null;
+  //     }
+  //   };
+  // }, [ownClientId, handleSignal]);
+  
   useEffect(() => {
     if (ownClientId && !eventSourceRef.current) {
       const es = new EventSource(`/api/signaling/subscribe?clientId=${ownClientId}`);
       eventSourceRef.current = es;
+  
       es.onopen = () => {
         console.log("SSE connection opened");
       };
+  
       es.onmessage = (event) => {
+        console.log("Raw SSE message received:", event.data); // 受信データの raw ログ
         try {
-          if (event.data === 'ping') return;
+          // ping メッセージはそのまま無視
+          if (event.data.trim() === "ping") {
+            console.log("Received ping");
+            return;
+          }
           const message = JSON.parse(event.data);
+          console.log("Parsed SSE message:", message);
           handleSignal(message);
         } catch (err) {
           console.error("Failed to parse SSE data", err);
         }
       };
+  
       es.onerror = (err) => {
         console.error("SSE error:", err);
-        // ここで再接続処理などを検討
+        // 必要ならここで再接続処理などを入れる
       };
     }
     return () => {
@@ -129,7 +167,6 @@ export default function VoiceCall() {
     };
   }, [ownClientId, handleSignal]);
   
-
   // 通話開始
   async function startCall() {
     if (!ownClientId || !peerClientId) {
