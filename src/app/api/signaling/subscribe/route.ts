@@ -74,7 +74,6 @@ export async function GET(request: Request): Promise<Response> {
       }
     },
     async cancel() {
-      // クライアントが SSE 接続を閉じたときのクリーンアップ
       if (interval) {
         clearInterval(interval);
       }
